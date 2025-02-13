@@ -1,0 +1,238 @@
+---
+
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: app-service
+#  namespace: telegraf-namespace
+# spec:
+#   selector:
+#     app: app
+#   ports:
+#   - protocol: "TCP"
+#     port: 30002
+#     targetPort: 5000
+#   type: LoadBalancer
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: telegraf-namespace
+  labels:
+    app: app
+spec:
+  selector:
+    app: app
+  ports:
+    - protocol: TCP
+      port: 5000 # The port your Python app listens on
+      targetPort: 5000 # The port your Python app listens on within the container
+---  
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: telegraf-namespace
+  labels:
+    app: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: app:latest
+          imagePullPolicy: Never  # or IfNotPresent
+          ports:
+            - containerPort: 5000
+
+
+
+
+---
+
+
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: app-nodeport
+#   namespace: telegraf-namespace
+# spec:
+#   selector:
+#     app: app
+#   type: NodePort
+#   ports:
+#     - protocol: TCP
+#       port: 5000
+#       targetPort: 5000
+#       nodePort: 30002 # Choose any available port number in your range
+
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegraf-config
+  namespace: telegraf-namespace
+data:
+  telegraf.conf: |
+    [global_tags]
+      # Add any global tags here
+      
+    [agent]
+      interval = "10s" # Adjust the interval as per your requirements
+      round_interval = true
+      metric_batch_size = 1000
+      metric_buffer_limit = 10000
+      collection_jitter = "0s"
+      flush_interval = "10s"
+      flush_jitter = "0s"
+      precision = ""
+      hostname = "" # Set the hostname for identifying metrics source
+    
+
+    [[inputs.cpu]]
+    [[inputs.mem]]
+
+    [[inputs.http]]
+      urls = ["http://app:5000/random-data"]
+      interval = "10s"
+      name_override = "app_metrics"
+      method = "GET"
+      timeout = "5s"
+      data_format = "json"
+
+
+    [[outputs.influxdb_v2]]
+      urls = ["http://influxdb:8086"]
+      token = "RtSzsn1SEZF1lqEUbr_qMrd5oXy2VLPAXy1wFgw7lzKy3SyIwWOe0CZXNbQwBYJwCQKL1Kd7asjzv36ff9NXCA=="
+      organization = "org"
+      bucket = "bucket"
+
+---
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegraf
+  namespace: telegraf-namespace
+spec:
+  replicas: 1 # Adjust the number of replicas as needed
+  selector:
+    matchLabels:
+      app: telegraf
+  template:
+    metadata:
+      labels:
+        app: telegraf
+    spec:
+      containers:
+        - name: telegraf
+          image: telegraf:latest # Replace with the Telegraf image name and version
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/telegraf
+      volumes:
+        - name: config-volume
+          configMap:
+            name: telegraf-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telegraf-service
+  namespace: telegraf-namespace
+spec:
+  selector:
+    app: telegraf  # Replace with the appropriate label for your Telegraf Deployment
+  ports:
+    - protocol: TCP
+      port: 8181  # The port Telegraf listens on
+      targetPort: 8181  # The port Telegraf listens on within the container
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: influxdb-pvc
+  namespace: telegraf-namespace
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi # Adjust storage size as needed
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb
+  namespace: telegraf-namespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: influxdb
+  template:
+    metadata:
+      labels:
+        app: influxdb
+    spec:
+      containers:
+        - name: influxdb
+          image: influxdb:latest
+          ports:
+            - containerPort: 8086
+          volumeMounts:
+            - name: influxdb-storage
+              mountPath: /var/lib/influxdb
+      volumes:
+        - name: influxdb-storage
+          persistentVolumeClaim:
+            claimName: influxdb-pvc
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb
+  namespace: telegraf-namespace
+spec:
+  selector:
+    app: influxdb
+  ports:
+    - protocol: TCP
+      port: 8086
+      targetPort: 8086
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb-nodeport
+  namespace: telegraf-namespace
+spec:
+  selector:
+    app: influxdb
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 8086
+      targetPort: 8086
+      nodePort: 30001 # Choose any available port number in your range
